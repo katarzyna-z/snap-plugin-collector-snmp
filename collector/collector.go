@@ -168,8 +168,10 @@ func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricTyp
 
 	//initialization of plugin structure (only once)
 	if !p.initialized {
+		fmt.Println("******* plugin initialization *******")
 		configs, serr := getMetricsConfig(metrics[0])
 		if serr != nil {
+			fmt.Println("******* get metrics config errr *******")
 			return nil, fmt.Errorf(serr.Error())
 		}
 		for _, cfg := range configs {
@@ -200,8 +202,10 @@ func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricTyp
 	agentConfigVars := getAgentConfig(metrics[0])
 	agentConfig, serr := configReader.GetSnmpAgentConfig(agentConfigVars)
 	if serr != nil {
+		fmt.Println("******* configReader.GetSnmpAgentConfig error: ", serr, "******* ")
 		return nil, serr
 	}
+	fmt.Println("******* agentConfig ", agentConfig, "******* ")
 
 	//lock using of connections in watchConnections
 	mtxSnmpConnections.Lock()
@@ -209,49 +213,58 @@ func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricTyp
 
 	conn, serr := getConnection(agentConfig)
 	if serr != nil {
+		fmt.Println("******* getConnection error: ", serr, conn, "******* ")
 		return nil, serr
 	}
+	fmt.Println("* getConnection ok *")
 
 	mts := []plugin.MetricType{}
-
+	fmt.Println("* len of metrics: ", len(metrics), "*")
 	for _, metric := range metrics {
-
+		fmt.Println("* metric namespace ", metric.Namespace().String(), " *")
 		//get metrics to collect
 		metricsConfigs, serr := getMetricsToCollect(metric.Namespace().String(), p.metricsConfigs)
 		if serr != nil {
+			fmt.Println("******* getMetricsToCollect ", serr, "********")
 			log.WithFields(serr.Fields()).Warn(serr.Error())
 			return nil, serr
 		}
+		fmt.Println("* len of metrics to collect: ", len(metricsConfigs), "*")
 
 		wgCollectedMetrics.Add(len(metricsConfigs))
 
 		for _, cfg := range metricsConfigs {
+			fmt.Println("* metricsConfigs loop - started *")
 
 			go func(cfg configReader.Metric) {
-
+				fmt.Println("* goroutine *")
 				defer wgCollectedMetrics.Done()
 
 				conn.mtx.Lock()
 
 				//get value of metric/metrics
 				results, serr := snmp_.readElements(conn.handler, cfg.Oid, cfg.Mode)
+				fmt.Println("* snmp_.readElements *", " oid:  ", cfg.Oid, "cfg.Mode: ", cfg.Mode)
 				if serr != nil {
 					log.WithFields(serr.Fields()).Warn(serr.Error())
+					fmt.Println("*  snmp_.readElements error *", serr)
 					conn.mtx.Unlock()
 					return
 				}
 
 				//get dynamic elements of namespace parts
 				serr = getDynamicNamespaceElements(conn.handler, results, &cfg)
+				fmt.Println("* getDynamicNamespaceElements *", " results:  ", results, "cfg: ", cfg)
 				if serr != nil {
 					log.WithFields(serr.Fields()).Warn(serr.Error())
+					fmt.Println("*  getDynamicNamespaceElements error *", serr)
 					conn.mtx.Unlock()
 					return
 				}
 
 				conn.lastUsed = time.Now()
 				conn.mtx.Unlock()
-
+				fmt.Println("* results length *", len(results), "*")
 				for i, result := range results {
 
 					//build namespace for metric
@@ -263,16 +276,20 @@ func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricTyp
 							namespace = namespace.AddStaticElement(ns.Values[i])
 						}
 					}
+					fmt.Println("* new namespace: ", namespace.String())
 
 					//convert metric types
 					val, serr := convertSnmpDataToMetric(result.Variable.String(), result.Variable.Type())
+					fmt.Println("* convertSnmpDataToMetric: result value string: ", result.Variable.String(), " * ", result.Variable.Type(), "*", " serr ", serr, "*")
 					if serr != nil {
+						fmt.Println("* convertSnmpDataToMetric *", serr)
 						log.WithFields(serr.Fields()).Warn(serr.Error())
 						continue
 					}
 
 					//modify numeric metric - use scale and shift parameters
 					data := modifyNumericMetric(val, cfg.Scale, cfg.Shift)
+					fmt.Println("* data: ", data, "*")
 
 					//creating metric
 					mt := plugin.MetricType{
@@ -289,13 +306,19 @@ func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricTyp
 
 					//adding metric to list of metrics
 					mtxMetrics.Lock()
+					fmt.Println("* append metric*")
 					mts = append(mts, mt)
+					fmt.Println("* append metric* ", len(mts), "*")
 					mtxMetrics.Unlock()
 				}
 			}(cfg)
 		}
+		fmt.Println("* metricsConfigs loop - finished *")
 		wgCollectedMetrics.Wait()
+		fmt.Println("*wait finished*")
 	}
+
+	fmt.Println("*collect metrics finished *", len(mts))
 	return mts, nil
 }
 
@@ -322,6 +345,7 @@ func (s *snmpType) newHandler(hostConfig configReader.SnmpAgent) (*snmpgo.SNMP, 
 
 //ReadElements reads data using SNMP requests
 func (s *snmpType) readElements(handler *snmpgo.SNMP, oid string, mode string) ([]*snmpgo.VarBind, serror.SnapError) {
+	fmt.Println("* (s *snmpType) readElements *")
 	return snmp.ReadElements(handler, oid, mode)
 }
 
