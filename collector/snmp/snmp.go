@@ -29,6 +29,8 @@ import (
 	"github.com/intelsdi-x/snap-plugin-collector-snmp/collector/configReader"
 	"github.com/intelsdi-x/snap/core/serror"
 	"github.com/k-sone/snmpgo"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 func NewHandler(agentConfig configReader.SnmpAgent) (*snmpgo.SNMP, serror.SnapError) {
@@ -36,7 +38,7 @@ func NewHandler(agentConfig configReader.SnmpAgent) (*snmpgo.SNMP, serror.SnapEr
 		Version:          getSNMPVersion(agentConfig.SnmpVersion),
 		Network:          agentConfig.Network,
 		Address:          agentConfig.Address,
-		Timeout:          time.Duration(agentConfig.Timeout) * time.Second,
+		Timeout:          time.Duration(agentConfig.Timeout) * time.Millisecond,
 		Retries:          agentConfig.Retries,
 		Community:        agentConfig.Community,
 		UserName:         agentConfig.UserName,
@@ -56,80 +58,120 @@ func NewHandler(agentConfig configReader.SnmpAgent) (*snmpgo.SNMP, serror.SnapEr
 	return handler, nil
 }
 
-func ReadElements(handler *snmpgo.SNMP, oid string, mode string) ([]*snmpgo.VarBind, serror.SnapError) {
+func ReadElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout time.Duration) ([]*snmpgo.VarBind, serror.SnapError) {
+	timeChan := time.NewTimer(requestTimeout).C
 
+	doneChan := make(chan bool)
 	//results received through SNMP requests
 	results := []*snmpgo.VarBind{}
 
-	if err := handler.Open(); err != nil {
-		// Failed to open connection
-		return results, serror.New(err)
-	}
+	go func(oid string, mode string) {
 
-	//get elements in node OID
-	nodeOid := strings.Trim(oid, ".")
-	oidParts := strings.Split(nodeOid, ".")
+		if err := handler.Open(); err != nil {
+			// Failed to open connection
+			log.Error(err)
+			return
+		}
+		//get elements in node OID
+		nodeOid := strings.Trim(oid, ".")
+		oidParts := strings.Split(nodeOid, ".")
 
-	//get length of node OID (used to stop reading in table and walk modes)
-	nodeOIDLength := len(oidParts)
+		//get length of node OID (used to stop reading in table and walk modes)
+		nodeOIDLength := len(oidParts)
 
-	//previous OID (used to stop reading in table and walk modes)
-	var prevOid string
+		//previous OID (used to stop reading in table and walk modes)
+		var prevOid string
 
-	//loop through one node of MIB
+		//loop through one node of MIB
+		for {
+			oids, err := snmpgo.NewOids([]string{oid})
+			if err != nil {
+				// Failed to parse Oids
+				log.Error(err)
+				//return results, serror.New(err)
+			}
+
+			var pdu snmpgo.Pdu
+
+			logFields := map[string]interface{}{
+				"mode":    mode,
+				"OID":     oid,
+			}
+			log.WithFields(logFields).Info(fmt.Errorf("A new SNMP request"))
+
+			if mode == configReader.ModeSingle {
+				pdu, err = handler.GetRequest(oids)
+			} else {
+				pdu, err = handler.GetNextRequest(oids)
+			}
+
+			logFields = map[string]interface{}{
+				"mode":         mode,
+				"OID":          oid,
+				"err":          err,
+				"error_status": pdu.ErrorStatus(),
+				"result":       pdu.VarBinds()[0],
+			}
+			log.WithFields(logFields).Info(fmt.Errorf("A new SNMP response"))
+
+			if err != nil {
+				// Failed to request
+				//return results, serror.New(err)
+				log.Error(err)
+			}
+
+			if pdu.ErrorStatus() != snmpgo.NoError {
+				// Received an error from the agent
+				//return results, serror.New(fmt.Errorf("Received an error from the SNMP agent: %v", pdu.ErrorStatus()))
+				log.Error(fmt.Errorf("Received an error from the SNMP agent: %v", pdu.ErrorStatus()))
+				break
+			}
+
+			if len(pdu.VarBinds()) != 1 {
+				log.Error(fmt.Errorf("Unaccepted number of results, received %v results", len(pdu.VarBinds())))
+				//return results, serror.New(fmt.Errorf("Unaccepted number of results, received %v results", len(pdu.VarBinds())))
+			}
+
+			// select a VarBind
+			result := pdu.VarBinds()[0]
+
+			if mode == configReader.ModeSingle {
+				results = append(results, result)
+				break
+			} else {
+				oid = result.Oid.String()
+
+				//get current elements in node OID
+				currOidParts := strings.Split(strings.Trim(oid, "."), ".")
+
+				// if length of new oid is lower then it is the another node
+				if len(currOidParts) < nodeOIDLength {
+					break
+				}
+
+				currNodeOid := strings.Join(currOidParts[:nodeOIDLength], ".")
+
+				//check if there is a new element to read
+				if nodeOid != currNodeOid || prevOid == oid ||
+					(mode == configReader.ModeTable && (len(oidParts)+1) != len(currOidParts)) {
+					break
+				}
+				prevOid = oid
+				results = append(results, result)
+			}
+		}
+		doneChan <- true
+	}(oid, mode)
+
 	for {
-		oids, err := snmpgo.NewOids([]string{oid})
-		if err != nil {
-			// Failed to parse Oids
-			return results, serror.New(err)
-		}
+		select {
+		case <-timeChan:
+			return nil, serror.New(fmt.Errorf("Timer expired, SNMP agent does not reply in sufficient time"))
+		case <-doneChan:
+			return results, nil
+		default:
+			continue
 
-		var pdu snmpgo.Pdu
-		if mode == configReader.ModeSingle {
-			pdu, err = handler.GetRequest(oids)
-		} else {
-			pdu, err = handler.GetNextRequest(oids)
-		}
-		if err != nil {
-			// Failed to request
-			return results, serror.New(err)
-		}
-
-		if pdu.ErrorStatus() != snmpgo.NoError {
-			// Received an error from the agent
-			return results, serror.New(fmt.Errorf("Received an error from the SNMP agent: %v", pdu.ErrorStatus()))
-		}
-
-		if len(pdu.VarBinds()) != 1 {
-			return results, serror.New(fmt.Errorf("Unaccepted number of results, received %v results", len(pdu.VarBinds())))
-		}
-
-		// select a VarBind
-		result := pdu.VarBinds()[0]
-
-		if mode == configReader.ModeSingle {
-			results = append(results, result)
-			break
-		} else {
-			oid = result.Oid.String()
-
-			//get current elements in node OID
-			currOidParts := strings.Split(strings.Trim(oid, "."), ".")
-
-			// if length of new oid is lower then it is the another node
-			if len(currOidParts) < nodeOIDLength {
-				break
-			}
-
-			currNodeOid := strings.Join(currOidParts[:nodeOIDLength], ".")
-
-			//check if there is a new element to read
-			if nodeOid != currNodeOid || prevOid == oid ||
-				(mode == configReader.ModeTable && (len(oidParts)+1) != len(currOidParts)) {
-				break
-			}
-			prevOid = oid
-			results = append(results, result)
 		}
 	}
 	return results, nil

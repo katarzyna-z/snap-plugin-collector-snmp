@@ -2,7 +2,7 @@
   "version": 1,
   "schedule": {
     "type": "simple",
-    "interval": "30s"
+    "interval": "60s"
   },
   "workflow": {
     "collect": {
@@ -35,17 +35,11 @@
           "community": "public",
           "network": "udp",
           "timeout": 500,
+          "request_timeout": 1000,
+          "collection_max_time": 20000,
           "retries": 5
         }
-      },
-      "publish": [
-        {
-          "plugin_name": "file",
-          "config": {
-            "file": "/tmp/published_snmp_interfaces.txt"
-          }
-        }
-      ]
+      }
     }
   }
 }

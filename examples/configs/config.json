@@ -1,10 +1,11 @@
 {
     "control": {
+       "max_running_plugins": 999,
 		"plugins": {
         "collector": {
             "snmp": {
                 "all": {
-                    "setfile": "setfile.json"
+                    "setfile": "setfile_interfaces.json"
                 }
             }
       },

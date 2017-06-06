@@ -148,6 +148,8 @@ type SnmpAgent struct {
 	ContextName      string `mapstructure:"context_name"`
 	Retries          uint   `mapstructure:"retries"`
 	Timeout          int    `mapstructure:"timeout"`
+	RequestTimeout   int	`mapstructure:"request_timeout"`
+	CollectionMaxTime int   `mapstructure:"collection_max_time"`
 }
 
 type Namespace struct {
@@ -182,7 +184,7 @@ var (
 	//AgentConfigParameters slice of agent configuration parameters
 	SnmpAgentConfigParameters = []string{agentName, agentAddress, agentSnmpVersion, agentCommunity, agentNetwork,
 		agentUserName, agentSecurityLevel, agentAuthPassword, agentAuthProtocol, agentPrivPassword,
-		agentPrivProtocol, agentSecurityEngineId, agentContextEngineID, agentContextName, agentRetries, agentTimeout}
+		agentPrivProtocol, agentSecurityEngineId, agentContextEngineID, agentContextName, agentRetries, agentTimeout, "request_timeout", "collection_max_time"}
 
 	//modeOptions slice of options for mode parameter
 	modeOptions = []interface{}{ModeSingle, ModeWalk, ModeTable}
@@ -314,6 +316,17 @@ func validateSnmpAgentConfig(config SnmpAgent) serror.SnapError {
 		if !checkSetParameter(config.Timeout) {
 			config.Timeout = defaultTimeout
 		}
+
+		if !checkSetParameter(config.RequestTimeout) {
+			logFields["parameter"] = agentPrivProtocol
+			return serror.New(fmt.Errorf(inCorrectValueOfParameter, config.PrivProtocol, privProtocolOptions), logFields)
+		}
+
+		if !checkSetParameter(config.CollectionMaxTime) {
+			logFields["parameter"] = agentPrivProtocol
+			return serror.New(fmt.Errorf(inCorrectValueOfParameter, config.PrivProtocol, privProtocolOptions), logFields)
+		}
+
 
 	}
 	return nil
