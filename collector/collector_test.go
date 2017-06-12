@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/intelsdi-x/snap-plugin-collector-snmp/collector/configReader"
 	"github.com/intelsdi-x/snap/control/plugin"
@@ -55,23 +56,9 @@ func newSNMPHandler(s *snmpgo.SNMP, e serror.SnapError) snmpHandlerEntry {
 	return snmpHandlerEntry{s, e}
 }
 
-type snmpMock struct {
-	handlerEntry snmpHandlerEntry
-	elementEntry snmpElementEntry
-}
-
 var snmpHandlerTestTable = map[int]snmpHandlerEntry{
 	SUCCESSFULLY_CREATED_HANDLER:   newSNMPHandler(&snmpgo.SNMP{}, nil),
 	UNSUCCESSFULLY_CREATED_HANDLER: newSNMPHandler(&snmpgo.SNMP{}, serror.New(fmt.Errorf("Error - new handler not created"))),
-}
-
-func (m *snmpMock) newHandler(hostConfig configReader.SnmpAgent) (*snmpgo.SNMP, serror.SnapError) {
-	return m.handlerEntry.s, m.handlerEntry.err
-}
-
-func (m *snmpMock) readElements(handler *snmpgo.SNMP, oid string, mode string) ([]*snmpgo.VarBind, serror.SnapError) {
-	varBinds := []*snmpgo.VarBind{m.elementEntry.element}
-	return varBinds, m.elementEntry.err
 }
 
 type snmpElementEntry struct {
@@ -92,7 +79,40 @@ var snmpElementTestTable = map[int]snmpElementEntry{
 	SNMP_ELEMENT_INCORRECT:            newElementEntry("", nil, serror.New(fmt.Errorf("Error - snmp request fails"))),
 }
 
+type snmpMock struct {
+	handlerEntry snmpHandlerEntry
+	elementEntry snmpElementEntry
+}
+
+func (m *snmpMock) newHandler(hostConfig configReader.SnmpAgent) (*snmpgo.SNMP, serror.SnapError) {
+	return m.handlerEntry.s, m.handlerEntry.err
+}
+
+func (m *snmpMock) readElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout int) ([]*snmpgo.VarBind, serror.SnapError) {
+	varBinds := []*snmpgo.VarBind{m.elementEntry.element}
+	return varBinds, m.elementEntry.err
+}
+
 func (m *snmpMock) ReadElement(handler *snmpgo.SNMP, oid string) (*snmpgo.VarBind, serror.SnapError) {
+	return m.elementEntry.element, m.elementEntry.err
+}
+
+type snmpMockTimeout struct {
+	handlerEntry snmpHandlerEntry
+	elementEntry snmpElementEntry
+}
+
+func (m *snmpMockTimeout) newHandler(hostConfig configReader.SnmpAgent) (*snmpgo.SNMP, serror.SnapError) {
+	return m.handlerEntry.s, m.handlerEntry.err
+}
+
+func (m *snmpMockTimeout) readElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout int) ([]*snmpgo.VarBind, serror.SnapError) {
+	varBinds := []*snmpgo.VarBind{m.elementEntry.element}
+	time.Sleep(time.Second * 30)
+	return varBinds, m.elementEntry.err
+}
+
+func (m *snmpMockTimeout) ReadElement(handler *snmpgo.SNMP, oid string) (*snmpgo.VarBind, serror.SnapError) {
 	return m.elementEntry.element, m.elementEntry.err
 }
 
@@ -224,7 +244,52 @@ func TestGetConfigPolicy(t *testing.T) {
 		So(configPolicy, ShouldNotBeNil)
 	})
 }
+/*
+func TestCollectMetricsTimeout(t *testing.T) {
+	Convey("Collecting metrics", t, func() {
+		plg := New()
 
+		//create setfile
+		createMockFile(mockFileCont)
+		defer deleteMockFile()
+
+		//create plugin config
+		pluginConfig := plugin.NewPluginConfigType()
+		pluginConfig.AddItem(setFileConfigVar, ctypes.ConfigValueStr{Value: mockFilePath})
+
+		//setfile is read in GetMetricsTypes
+		mts, err := plg.GetMetricTypes(pluginConfig)
+		So(err, ShouldBeNil)
+
+		//create host config
+		config := cdata.NewNode()
+		config.AddItem("snmp_version", ctypes.ConfigValueStr{Value: "v2c"})
+		config.AddItem("snmp_agent_address", ctypes.ConfigValueStr{Value: "127.0.0.1"})
+		config.AddItem("community", ctypes.ConfigValueStr{Value: "public"})
+		config.AddItem("timeout", ctypes.ConfigValueInt{Value: 5})
+		config.AddItem("request_timeout", ctypes.ConfigValueInt{Value: 10000})
+		config.AddItem("collection_max_time", ctypes.ConfigValueInt{Value: 20000})
+		config.AddItem(setFileConfigVar, ctypes.ConfigValueStr{Value: mockFilePath})
+
+		for i := range mts {
+			mts[i].Config_ = config
+		}
+
+		Convey("when received data with OCTET_STRING type", func() {
+			snmp_ = &snmpMockTimeout{handlerEntry: snmpHandlerTestTable[SUCCESSFULLY_CREATED_HANDLER],
+				elementEntry: snmpElementTestTable[SNMP_ELEMENT_CORRECT_OCTET_STRING]}
+
+			So(func() { plg.CollectMetrics(mts) }, ShouldNotPanic)
+			metrics, err := plg.CollectMetrics(mts)
+
+			So(err, ShouldBeNil)
+			So(metrics, ShouldNotBeEmpty)
+			//So(metrics[0].Data().(string), ShouldEqual, "variable123")
+		})
+
+	})
+}
+*/
 func TestCollectMetrics(t *testing.T) {
 	Convey("Collecting metrics", t, func() {
 
@@ -543,7 +608,7 @@ func TestGetDynamicNamespaceElements(t *testing.T) {
 			handler, err := snmp_.newHandler(snmpAgentConfig)
 			So(err, ShouldBeNil)
 
-			serr := getDynamicNamespaceElements(handler, varBinds, &metricConfig[0])
+			serr := getDynamicNamespaceElements(handler, varBinds, &metricConfig[0], snmpAgentConfig.RequestTimeout)
 			So(serr, ShouldNotBeNil)
 
 		})
@@ -577,7 +642,7 @@ func TestGetDynamicNamespaceElements(t *testing.T) {
 			handler, err := snmp_.newHandler(snmpAgentConfig)
 			So(err, ShouldBeNil)
 
-			serr := getDynamicNamespaceElements(handler, varBinds, &metricConfig[0])
+			serr := getDynamicNamespaceElements(handler, varBinds, &metricConfig[0], snmpAgentConfig.RequestTimeout)
 			So(serr, ShouldNotBeNil)
 
 		})
@@ -610,7 +675,7 @@ func TestGetDynamicNamespaceElements(t *testing.T) {
 			handler, err := snmp_.newHandler(snmpAgentConfig)
 			So(err, ShouldBeNil)
 
-			serr := getDynamicNamespaceElements(handler, varBinds, &metricConfig[0])
+			serr := getDynamicNamespaceElements(handler, varBinds, &metricConfig[0], snmpAgentConfig.RequestTimeout)
 			So(serr, ShouldNotBeNil)
 		})
 
@@ -644,7 +709,7 @@ func TestGetDynamicNamespaceElements(t *testing.T) {
 			handler, err := snmp_.newHandler(snmpAgentConfig)
 			So(err, ShouldBeNil)
 
-			serr := getDynamicNamespaceElements(handler, varBinds, &metricConfig[0])
+			serr := getDynamicNamespaceElements(handler, varBinds, &metricConfig[0], snmpAgentConfig.RequestTimeout)
 			So(serr, ShouldBeNil)
 		})
 	})

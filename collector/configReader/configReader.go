@@ -97,6 +97,12 @@ const (
 	//agentTimeout indicates timeout for network connection in SNMP agent configuration
 	agentTimeout = "timeout"
 
+	//agentRequestTimeout indicates timeout for request
+	agentRequestTimeout = "request_timeout"
+
+	//agentCollectionMaxTime indicates max time for collection
+	agentCollectionMaxTime = "collection_max_time"
+
 	//metricNamespace indicates metric namespace
 	metricNamespace = "namespace"
 
@@ -121,8 +127,14 @@ const (
 	//defaultRetries default number of connection retries
 	defaultRetries = 1
 
-	//defaultTimeout timeout for network connection
-	defaultTimeout = 5
+	//defaultTimeout indicates timeout for network connection
+	defaultTimeout = 500
+
+	//defaultRequestTimeout indicates timeout for request
+	defaultRequestTimeout = 600
+
+	//defaultCollectionMaxTime indicates max time for collection
+	defaultCollectionMaxTime = 30000
 
 	//missingRequiredParameter error message for missing required parameter
 	missingRequiredParameter = "Missing required parameter in configuration (%s)"
@@ -132,24 +144,24 @@ const (
 )
 
 type SnmpAgent struct {
-	Name             string `mapstructure:"snmp_agent_name"`
-	SnmpVersion      string `mapstructure:"snmp_version"`
-	Address          string `mapstructure:"snmp_agent_address"`
-	Community        string `mapstructure:"community"`
-	Network          string `mapstructure:"network"`
-	UserName         string `mapstructure:"user_name"`
-	SecurityLevel    string `mapstructure:"security_level"`
-	AuthPassword     string `mapstructure:"auth_password"`
-	AuthProtocol     string `mapstructure:"auth_protocol"`
-	PrivPassword     string `mapstructure:"priv_password"`
-	PrivProtocol     string `mapstructure:"priv_protocol"`
-	SecurityEngineId string `mapstructure:"security_engine_id"`
-	ContextEngineId  string `mapstructure:"context_engine_id"`
-	ContextName      string `mapstructure:"context_name"`
-	Retries          uint   `mapstructure:"retries"`
-	Timeout          int    `mapstructure:"timeout"`
-	RequestTimeout   int	`mapstructure:"request_timeout"`
-	CollectionMaxTime int   `mapstructure:"collection_max_time"`
+	Name              string `mapstructure:"snmp_agent_name"`
+	SnmpVersion       string `mapstructure:"snmp_version"`
+	Address           string `mapstructure:"snmp_agent_address"`
+	Community         string `mapstructure:"community"`
+	Network           string `mapstructure:"network"`
+	UserName          string `mapstructure:"user_name"`
+	SecurityLevel     string `mapstructure:"security_level"`
+	AuthPassword      string `mapstructure:"auth_password"`
+	AuthProtocol      string `mapstructure:"auth_protocol"`
+	PrivPassword      string `mapstructure:"priv_password"`
+	PrivProtocol      string `mapstructure:"priv_protocol"`
+	SecurityEngineId  string `mapstructure:"security_engine_id"`
+	ContextEngineId   string `mapstructure:"context_engine_id"`
+	ContextName       string `mapstructure:"context_name"`
+	Retries           uint   `mapstructure:"retries"`
+	Timeout           int    `mapstructure:"timeout"`
+	RequestTimeout    int    `mapstructure:"request_timeout"`
+	CollectionMaxTime int    `mapstructure:"collection_max_time"`
 }
 
 type Namespace struct {
@@ -184,7 +196,7 @@ var (
 	//AgentConfigParameters slice of agent configuration parameters
 	SnmpAgentConfigParameters = []string{agentName, agentAddress, agentSnmpVersion, agentCommunity, agentNetwork,
 		agentUserName, agentSecurityLevel, agentAuthPassword, agentAuthProtocol, agentPrivPassword,
-		agentPrivProtocol, agentSecurityEngineId, agentContextEngineID, agentContextName, agentRetries, agentTimeout, "request_timeout", "collection_max_time"}
+		agentPrivProtocol, agentSecurityEngineId, agentContextEngineID, agentContextName, agentRetries, agentTimeout, agentRequestTimeout, agentCollectionMaxTime}
 
 	//modeOptions slice of options for mode parameter
 	modeOptions = []interface{}{ModeSingle, ModeWalk, ModeTable}
@@ -318,16 +330,12 @@ func validateSnmpAgentConfig(config SnmpAgent) serror.SnapError {
 		}
 
 		if !checkSetParameter(config.RequestTimeout) {
-			logFields["parameter"] = agentPrivProtocol
-			return serror.New(fmt.Errorf(inCorrectValueOfParameter, config.PrivProtocol, privProtocolOptions), logFields)
+			config.Timeout = defaultRequestTimeout
 		}
 
 		if !checkSetParameter(config.CollectionMaxTime) {
-			logFields["parameter"] = agentPrivProtocol
-			return serror.New(fmt.Errorf(inCorrectValueOfParameter, config.PrivProtocol, privProtocolOptions), logFields)
+			config.Timeout = defaultCollectionMaxTime
 		}
-
-
 	}
 	return nil
 }

@@ -35,8 +35,8 @@
           "community": "public",
           "network": "udp",
           "timeout": 500,
-          "request_timeout": 1,
-          "collection_max_time": 2,
+          "request_timeout": 10000,
+          "collection_max_time": 20000,
           "retries": 5
         }
       }

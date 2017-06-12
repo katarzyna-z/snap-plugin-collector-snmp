@@ -58,10 +58,12 @@ func NewHandler(agentConfig configReader.SnmpAgent) (*snmpgo.SNMP, serror.SnapEr
 	return handler, nil
 }
 
-func ReadElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout time.Duration) ([]*snmpgo.VarBind, serror.SnapError) {
-	timeChan := time.NewTimer(requestTimeout).C
+func ReadElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout int) ([]*snmpgo.VarBind, serror.SnapError) {
+	var serr serror.SnapError
 
+	timeChan := time.NewTimer(time.Duration(requestTimeout) * time.Millisecond).C
 	doneChan := make(chan bool)
+
 	//results received through SNMP requests
 	results := []*snmpgo.VarBind{}
 
@@ -69,7 +71,7 @@ func ReadElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout 
 
 		if err := handler.Open(); err != nil {
 			// Failed to open connection
-			log.Error(err)
+			serr = serror.New(err)
 			return
 		}
 		//get elements in node OID
@@ -84,18 +86,19 @@ func ReadElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout 
 
 		//loop through one node of MIB
 		for {
+			var oids snmpgo.Oids
 			oids, err := snmpgo.NewOids([]string{oid})
 			if err != nil {
 				// Failed to parse Oids
-				log.Error(err)
-				//return results, serror.New(err)
+				serr = serror.New(err)
+				break
 			}
 
 			var pdu snmpgo.Pdu
 
 			logFields := map[string]interface{}{
-				"mode":    mode,
-				"OID":     oid,
+				"mode": mode,
+				"OID":  oid,
 			}
 			log.WithFields(logFields).Info(fmt.Errorf("A new SNMP request"))
 
@@ -116,20 +119,17 @@ func ReadElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout 
 
 			if err != nil {
 				// Failed to request
-				//return results, serror.New(err)
-				log.Error(err)
+				break
 			}
 
 			if pdu.ErrorStatus() != snmpgo.NoError {
-				// Received an error from the agent
-				//return results, serror.New(fmt.Errorf("Received an error from the SNMP agent: %v", pdu.ErrorStatus()))
-				log.Error(fmt.Errorf("Received an error from the SNMP agent: %v", pdu.ErrorStatus()))
+				err = fmt.Errorf("Received an error from the SNMP agent: %v", pdu.ErrorStatus())
 				break
 			}
 
 			if len(pdu.VarBinds()) != 1 {
-				log.Error(fmt.Errorf("Unaccepted number of results, received %v results", len(pdu.VarBinds())))
-				//return results, serror.New(fmt.Errorf("Unaccepted number of results, received %v results", len(pdu.VarBinds())))
+				err = fmt.Errorf("Unaccepted number of results, received %v results", len(pdu.VarBinds()))
+				break
 			}
 
 			// select a VarBind
@@ -168,13 +168,9 @@ func ReadElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout 
 		case <-timeChan:
 			return nil, serror.New(fmt.Errorf("Timer expired, SNMP agent does not reply in sufficient time"))
 		case <-doneChan:
-			return results, nil
-		default:
-			continue
-
+			return results, serr
 		}
 	}
-	return results, nil
 }
 
 func getSNMPVersion(s string) snmpgo.SNMPVersion {

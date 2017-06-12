@@ -38,7 +38,6 @@ import (
 	"github.com/intelsdi-x/snap/core"
 	"github.com/intelsdi-x/snap/core/serror"
 	"github.com/k-sone/snmpgo"
-	"net"
 )
 
 const (
@@ -88,7 +87,7 @@ type snmpType struct{}
 
 type snmpInterface interface {
 	newHandler(hostConfig configReader.SnmpAgent) (*snmpgo.SNMP, serror.SnapError)
-	readElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout time.Duration) ([]*snmpgo.VarBind, serror.SnapError)
+	readElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout int) ([]*snmpgo.VarBind, serror.SnapError)
 }
 
 var (
@@ -161,18 +160,9 @@ func (p *Plugin) GetMetricTypes(cfg plugin.ConfigType) ([]plugin.MetricType, err
 	return mts, nil
 }
 
-func ping(network string, address string, timeout time.Duration) error {
-	_, err := net.DialTimeout(network, address, timeout)
-	if err != nil {
-		return fmt.Errorf("Cannot establish connection with SNMP device, error: %s", err)
-	}
-	return err
-}
-
 // CollectMetrics returns list of requested metric values
 // It returns error in case retrieval was not successful
 func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricType, error) {
-
 	mts := []plugin.MetricType{}
 
 	//initialization of plugin structure (only once)
@@ -220,15 +210,9 @@ func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricTyp
 		mtxSnmpConnections.Lock()
 		defer mtxSnmpConnections.Unlock()
 
-		err := ping(agentConfig.Network, agentConfig.Address, time.Duration(agentConfig.Timeout)*time.Millisecond)
-		if err != nil {
-			//return nil, err
-			doneChan <- true
-		}
-
 		conn, serr := getConnection(agentConfig)
 		if serr != nil {
-			//return nil, serr
+			//cannot establish connection
 			doneChan <- true
 		}
 
@@ -238,8 +222,7 @@ func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricTyp
 			metricsConfigs, serr := getMetricsToCollect(metric.Namespace().String(), p.metricsConfigs)
 			if serr != nil {
 				log.WithFields(serr.Fields()).Warn(serr.Error())
-				//return nil, serr
-				doneChan <- true
+				break
 			}
 
 			for _, cfg := range metricsConfigs {
@@ -247,21 +230,19 @@ func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricTyp
 				conn.mtx.Lock()
 
 				//get value of metric/metrics
-				results, serr := snmp_.readElements(conn.handler, cfg.Oid, cfg.Mode, time.Millisecond*time.Duration(agentConfig.RequestTimeout))
+				results, serr := snmp_.readElements(conn.handler, cfg.Oid, cfg.Mode, agentConfig.RequestTimeout)
 				if serr != nil {
 					log.WithFields(serr.Fields()).Warn(serr.Error())
 					conn.mtx.Unlock()
-					//return nil, serr
-					doneChan <- true
+					break
 				}
 
 				//get dynamic elements of namespace parts
-				serr = getDynamicNamespaceElements(conn.handler, results, &cfg, time.Millisecond*time.Duration(agentConfig.RequestTimeout))
+				serr = getDynamicNamespaceElements(conn.handler, results, &cfg, agentConfig.RequestTimeout)
 				if serr != nil {
 					log.WithFields(serr.Fields()).Warn(serr.Error())
 					conn.mtx.Unlock()
-					//return nil, serr
-					doneChan <- true
+					break
 				}
 
 				conn.lastUsed = time.Now()
@@ -283,8 +264,7 @@ func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricTyp
 					val, serr := convertSnmpDataToMetric(result.Variable.String(), result.Variable.Type())
 					if serr != nil {
 						log.WithFields(serr.Fields()).Warn(serr.Error())
-						//return nil, serr
-						doneChan <- true
+						break
 					}
 
 					//modify numeric metric - use scale and shift parameters
@@ -316,11 +296,9 @@ func (p *Plugin) CollectMetrics(metrics []plugin.MetricType) ([]plugin.MetricTyp
 		case <-timeChan:
 			return nil, serror.New(fmt.Errorf("Timer expired, collection of metrics take too much time, check your configuration"))
 		case <-doneChan:
-			return mts, nil
-
+			return mts, serr
 		}
 	}
-	return mts, nil
 }
 
 // GetConfigPolicy returns config policy
@@ -345,7 +323,7 @@ func (s *snmpType) newHandler(hostConfig configReader.SnmpAgent) (*snmpgo.SNMP, 
 }
 
 //ReadElements reads data using SNMP requests
-func (s *snmpType) readElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout time.Duration) ([]*snmpgo.VarBind, serror.SnapError) {
+func (s *snmpType) readElements(handler *snmpgo.SNMP, oid string, mode string, requestTimeout int) ([]*snmpgo.VarBind, serror.SnapError) {
 	return snmp.ReadElements(handler, oid, mode, requestTimeout)
 }
 
@@ -382,7 +360,7 @@ func watchConnections() {
 }
 
 //getDynamicNamespaceElements gets dynamic elements of namespace, either sending SNMP requests or using part of OID
-func getDynamicNamespaceElements(handler *snmpgo.SNMP, results []*snmpgo.VarBind, metric *configReader.Metric, requestTimeout time.Duration) serror.SnapError {
+func getDynamicNamespaceElements(handler *snmpgo.SNMP, results []*snmpgo.VarBind, metric *configReader.Metric, requestTimeout int) serror.SnapError {
 	for i := 0; i < len(metric.Namespace); i++ {
 		//clear slice with dynamic parts of namespace
 		metric.Namespace[i].Values = []string{}
